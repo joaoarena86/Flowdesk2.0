@@ -1,0 +1,776 @@
+import { useState, useEffect } from "react";
+
+const STORAGE_KEY = "flowdesk2_v1";
+
+const C = {
+  bg: "#0a0a0a", bg1: "#111", bg2: "#181818", bg3: "#222",
+  orange: "#ff6a00", orangeD: "#cc5500", orangeL: "#ff6a0015",
+  text: "#f0f0f0", text2: "#aaa", text3: "#666",
+  border: "#2a2a2a", border2: "#333",
+  green: "#22c55e", red: "#ef4444", blue: "#3b82f6", yellow: "#f59e0b",
+  shadow: "0 2px 16px rgba(255,106,0,0.08)",
+};
+
+const STATUS = {
+  pending: { label: "A Iniciar", color: C.text3 },
+  doing: { label: "Em Andamento", color: C.orange },
+  done: { label: "Concluído", color: C.green },
+};
+
+const TEMPLATES = [
+  { id: "blank", label: "Em branco", tarefas: [] },
+  { id: "site", label: "Criação de Site", tarefas: ["Briefing", "Wireframe", "Design", "Desenvolvimento", "Testes", "Publicação"] },
+  { id: "lancamento", label: "Lançamento de Produto", tarefas: ["Pesquisa de mercado", "Identidade visual", "Landing page", "Campanha", "Lançamento", "Pós-venda"] },
+  { id: "evento", label: "Organização de Evento", tarefas: ["Definir data e local", "Convites", "Fornecedores", "Divulgação", "Execução", "Feedback"] },
+  { id: "pessoal", label: "Projeto Pessoal", tarefas: ["Definir objetivo", "Planejar etapas", "Executar fase 1", "Executar fase 2", "Revisar", "Concluir"] },
+];
+
+const CORES_PROJ = ["#ff6a00", "#3b82f6", "#22c55e", "#a855f7", "#ec4899", "#f59e0b", "#06b6d4", "#ef4444"];
+
+function hashPass(p) { let h = 0; for (let i = 0; i < p.length; i++) h = (Math.imul(31, h) + p.charCodeAt(i)) | 0; return h.toString(36); }
+function fmt(d) { return d ? new Date(d).toLocaleDateString("pt-BR") : "—"; }
+function today() { return new Date().toISOString().slice(0, 10); }
+
+function getUsers() { try { return JSON.parse(localStorage.getItem("fd2_users") || "{}"); } catch { return {}; } }
+function saveUsers(u) { localStorage.setItem("fd2_users", JSON.stringify(u)); }
+function getData(email) { try { return JSON.parse(localStorage.getItem(`fd2_${email}`) || "null"); } catch { return null; } }
+function saveData(email, d) { localStorage.setItem(`fd2_${email}`, JSON.stringify(d)); }
+
+function pct(proj) {
+  if (!proj.tarefas?.length) return 0;
+  return Math.round(proj.tarefas.filter(t => t.status === "done").length / proj.tarefas.length * 100);
+}
+
+function Neon({ children, style = {} }) {
+  return <span style={{ color: C.orange, textShadow: `0 0 8px ${C.orange}88`, ...style }}>{children}</span>;
+}
+
+function Card({ children, style = {} }) {
+  return <div style={{ background: C.bg1, border: `1px solid ${C.border}`, borderRadius: 14, padding: "1.25rem", ...style }}>{children}</div>;
+}
+
+function Btn({ children, onClick, color = C.orange, outline = false, danger = false, full = false, disabled = false, style = {} }) {
+  const bg = danger ? "#ef444415" : outline ? "transparent" : color;
+  const cl = danger ? C.red : outline ? color : "#000";
+  const bc = danger ? C.red : color;
+  return (
+    <button onClick={onClick} disabled={disabled}
+      style={{ cursor: disabled ? "not-allowed" : "pointer", background: bg, color: cl,
+        border: `1.5px solid ${bc}`, borderRadius: 10, padding: "10px 20px", fontSize: 14,
+        fontWeight: 700, fontFamily: "inherit", width: full ? "100%" : "auto",
+        opacity: disabled ? 0.5 : 1, boxShadow: outline || danger ? "none" : `0 0 12px ${color}44`,
+        letterSpacing: "0.3px", ...style }}>
+      {children}
+    </button>
+  );
+}
+
+function Input({ value, onChange, placeholder, type = "text", style = {} }) {
+  return (
+    <input value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} type={type}
+      style={{ width: "100%", boxSizing: "border-box", background: C.bg2, border: `1.5px solid ${C.border}`,
+        borderRadius: 10, padding: "11px 14px", fontSize: 14, color: C.text, fontFamily: "inherit",
+        outline: "none", ...style }} />
+  );
+}
+
+function Textarea({ value, onChange, placeholder, rows = 3 }) {
+  return (
+    <textarea value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} rows={rows}
+      style={{ width: "100%", boxSizing: "border-box", background: C.bg2, border: `1.5px solid ${C.border}`,
+        borderRadius: 10, padding: "11px 14px", fontSize: 14, color: C.text, fontFamily: "inherit",
+        outline: "none", resize: "vertical", lineHeight: 1.7 }} />
+  );
+}
+
+function Modal({ title, onClose, children, width = 480 }) {
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", zIndex: 100,
+      display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }}>
+      <div style={{ background: C.bg1, border: `1px solid ${C.orange}33`, borderRadius: 16,
+        padding: "2rem", width: "100%", maxWidth: width, maxHeight: "90vh", overflowY: "auto",
+        boxShadow: `0 0 60px ${C.orange}11` }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.5rem" }}>
+          <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>{title}</div>
+          <button onClick={onClose} style={{ background: "transparent", border: "none",
+            color: C.text3, cursor: "pointer", fontSize: 22, lineHeight: 1 }}>×</button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+export default function App() {
+  const [screen, setScreen] = useState("login");
+  const [email, setEmail] = useState(null);
+  const [projetos, setProjetos] = useState([]);
+  const [notas, setNotas] = useState([]);
+  const [tab, setTab] = useState("dashboard");
+
+  // auth
+  const [lu, setLu] = useState(""); const [lp, setLp] = useState("");
+  const [lNome, setLNome] = useState(""); const [lEmail, setLEmail] = useState("");
+  const [authErr, setAuthErr] = useState(""); const [isReg, setIsReg] = useState(false);
+  const [showConfig, setShowConfig] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  // projeto
+  const [modalProjeto, setModalProjeto] = useState(false);
+  const [projAberto, setProjAberto] = useState(null);
+  const [pNome, setPNome] = useState(""); const [pDesc, setPDesc] = useState("");
+  const [pFim, setPFim] = useState(""); const [pCor, setPCor] = useState(C.orange);
+  const [pTemplate, setPTemplate] = useState("blank");
+  const [pStatus, setPStatus] = useState("pending");
+
+  // tarefa
+  const [modalTarefa, setModalTarefa] = useState(false);
+  const [editTarefa, setEditTarefa] = useState(null);
+  const [tNome, setTNome] = useState(""); const [tInicio, setTInicio] = useState("");
+  const [tFim, setTFim] = useState(""); const [tStatus, setTStatus] = useState("pending");
+
+  // notas
+  const [notaAberta, setNotaAberta] = useState(null);
+  const [notaTitulo, setNotaTitulo] = useState(""); const [notaTexto, setNotaTexto] = useState("");
+  const [editNota, setEditNota] = useState(null);
+
+  const [confirmDeleteProj, setConfirmDeleteProj] = useState(null);
+  const [subTab, setSubTab] = useState("tarefas");
+
+  useEffect(() => {
+    const sess = localStorage.getItem("fd2_session");
+    if (sess) {
+      const { email: e } = JSON.parse(sess);
+      const d = getData(e);
+      if (d) { setEmail(e); setProjetos(d.projetos || []); setNotas(d.notas || []); setScreen("app"); }
+    }
+  }, []);
+
+  function save(e, p, n) {
+    const d = { projetos: p, notas: n };
+    saveData(e, d);
+  }
+
+  function saveProjetos(p) { setProjetos(p); save(email, p, notas); }
+  function saveNotas(n) { setNotas(n); save(email, projetos, n); }
+
+  function handleAuth() {
+    setAuthErr("");
+    const users = getUsers();
+    if (isReg) {
+      if (!lNome.trim() || !lEmail.trim() || !lp.trim()) { setAuthErr("Preencha todos os campos."); return; }
+      if (lp.length < 4) { setAuthErr("Senha mínima: 4 caracteres."); return; }
+      const e = lEmail.trim().toLowerCase();
+      if (users[e]) { setAuthErr("Email já cadastrado."); return; }
+      users[e] = { nome: lNome.trim(), pass: hashPass(lp) };
+      saveUsers(users);
+      saveData(e, { projetos: [], notas: [] });
+      setEmail(e); setProjetos([]); setNotas([]);
+      localStorage.setItem("fd2_session", JSON.stringify({ email: e }));
+      setScreen("app");
+    } else {
+      const e = lu.trim().toLowerCase();
+      if (!users[e] || users[e].pass !== hashPass(lp)) { setAuthErr("Email ou senha incorretos."); return; }
+      const d = getData(e);
+      setEmail(e); setProjetos(d?.projetos || []); setNotas(d?.notas || []);
+      localStorage.setItem("fd2_session", JSON.stringify({ email: e }));
+      setScreen("app");
+    }
+    setLu(""); setLp(""); setLNome(""); setLEmail("");
+  }
+
+  function handleLogout() {
+    localStorage.removeItem("fd2_session");
+    setEmail(null); setProjetos([]); setNotas([]); setScreen("login"); setTab("dashboard");
+  }
+
+  function handleDeleteAccount() {
+    const users = getUsers();
+    delete users[email];
+    saveUsers(users);
+    localStorage.removeItem(`fd2_${email}`);
+    localStorage.removeItem("fd2_session");
+    setEmail(null); setProjetos([]); setNotas([]); setScreen("login");
+  }
+
+  function getNome() { return getUsers()[email]?.nome || ""; }
+
+  function criarProjeto() {
+    if (!pNome.trim()) return;
+    const tmpl = TEMPLATES.find(t => t.id === pTemplate);
+    const tarefas = tmpl?.tarefas.map((nome, i) => ({
+      id: `t_${Date.now()}_${i}`, nome, status: "pending", inicio: "", fim: ""
+    })) || [];
+    const np = {
+      id: `p_${Date.now()}`, nome: pNome.trim(), desc: pDesc.trim(),
+      cor: pCor, status: pStatus, fim: pFim,
+      criadoEm: today(), tarefas, notas: []
+    };
+    saveProjetos([...projetos, np]);
+    setPNome(""); setPDesc(""); setPFim(""); setPCor(C.orange); setPTemplate("blank"); setPStatus("pending");
+    setModalProjeto(false);
+  }
+
+  function deletarProjeto(id) {
+    saveProjetos(projetos.filter(p => p.id !== id));
+    if (projAberto?.id === id) setProjAberto(null);
+    setConfirmDeleteProj(null);
+  }
+
+  function atualizarProjeto(proj) {
+    const lista = projetos.map(p => p.id === proj.id ? proj : p);
+    saveProjetos(lista);
+    setProjAberto(proj);
+  }
+
+  function mudarStatusProjeto(id, status) {
+    const lista = projetos.map(p => p.id === id ? { ...p, status } : p);
+    saveProjetos(lista);
+    if (projAberto?.id === id) setProjAberto({ ...projAberto, status });
+  }
+
+  function abrirModalTarefa(tarefa = null) {
+    if (tarefa) {
+      setEditTarefa(tarefa); setTNome(tarefa.nome);
+      setTInicio(tarefa.inicio || ""); setTFim(tarefa.fim || ""); setTStatus(tarefa.status);
+    } else {
+      setEditTarefa(null); setTNome(""); setTInicio(""); setTFim(""); setTStatus("pending");
+    }
+    setModalTarefa(true);
+  }
+
+  function salvarTarefa() {
+    if (!tNome.trim() || !projAberto) return;
+    let tarefas;
+    if (editTarefa) {
+      tarefas = projAberto.tarefas.map(t => t.id === editTarefa.id ?
+        { ...t, nome: tNome.trim(), inicio: tInicio, fim: tFim, status: tStatus } : t);
+    } else {
+      tarefas = [...projAberto.tarefas, { id: `t_${Date.now()}`, nome: tNome.trim(), inicio: tInicio, fim: tFim, status: tStatus }];
+    }
+    atualizarProjeto({ ...projAberto, tarefas });
+    setModalTarefa(false);
+  }
+
+  function deletarTarefa(id) {
+    atualizarProjeto({ ...projAberto, tarefas: projAberto.tarefas.filter(t => t.id !== id) });
+  }
+
+  function salvarNotaProjeto() {
+    if (!notaTexto.trim() || !projAberto) return;
+    const notasProjeto = projAberto.notas || [];
+    let novasNotas;
+    if (editNota) {
+      novasNotas = notasProjeto.map(n => n.id === editNota.id ?
+        { ...n, titulo: notaTitulo.trim() || "Nota", texto: notaTexto.trim() } : n);
+    } else {
+      novasNotas = [...notasProjeto, {
+        id: `n_${Date.now()}`, titulo: notaTitulo.trim() || "Nota",
+        texto: notaTexto.trim(), data: new Date().toLocaleDateString("pt-BR")
+      }];
+    }
+    atualizarProjeto({ ...projAberto, notas: novasNotas });
+    setNotaTitulo(""); setNotaTexto(""); setNotaAberta(null); setEditNota(null);
+  }
+
+  function deletarNotaProjeto(id) {
+    atualizarProjeto({ ...projAberto, notas: (projAberto.notas || []).filter(n => n.id !== id) });
+    setNotaAberta(null);
+  }
+
+  // métricas dashboard
+  const totalProjetos = projetos.length;
+  const projConcluidos = projetos.filter(p => p.status === "done").length;
+  const projAndamento = projetos.filter(p => p.status === "doing").length;
+  const totalTarefas = projetos.reduce((a, p) => a + (p.tarefas?.length || 0), 0);
+  const tarefasConcluidas = projetos.reduce((a, p) => a + (p.tarefas?.filter(t => t.status === "done").length || 0), 0);
+  const tarefasAtrasadas = projetos.reduce((a, p) => a + (p.tarefas?.filter(t =>
+    t.fim && t.fim < today() && t.status !== "done").length || 0), 0);
+
+  const TABS = [
+    { id: "dashboard", label: "Dashboard" },
+    { id: "projetos", label: "Projetos" },
+  ];
+
+  const inp = { width: "100%", boxSizing: "border-box", background: C.bg2, border: `1.5px solid ${C.border}`, borderRadius: 10, padding: "11px 14px", fontSize: 14, color: C.text, fontFamily: "inherit", outline: "none", marginBottom: 12 };
+
+  // LOGIN
+  if (screen === "login") return (
+    <div style={{ minHeight: "100vh", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", padding: "2rem", fontFamily: "'Segoe UI',system-ui,sans-serif" }}>
+      <style>{`*{box-sizing:border-box;}input:focus,textarea:focus{border-color:${C.orange}!important;outline:none;}input{color:${C.text}!important;}`}</style>
+      <div style={{ width: "100%", maxWidth: 420 }}>
+        <div style={{ textAlign: "center", marginBottom: "2.5rem" }}>
+          <div style={{ fontSize: 42, marginBottom: 10, filter: `drop-shadow(0 0 16px ${C.orange})` }}>◈</div>
+          <div style={{ fontSize: 30, fontWeight: 900, letterSpacing: "-0.5px" }}>
+            <Neon>Flow</Neon><span style={{ color: C.text }}>Desk</span>
+          </div>
+          <div style={{ fontSize: 14, color: C.text3, marginTop: 6 }}>Gerenciador de projetos profissional</div>
+        </div>
+        <Card style={{ boxShadow: `0 0 60px ${C.orange}0a` }}>
+          <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 20 }}>
+            {isReg ? "Criar conta" : "Entrar"}
+          </div>
+          {isReg && <>
+            <div style={{ fontSize: 12, color: C.text3, marginBottom: 6, letterSpacing: 1 }}>NOME COMPLETO</div>
+            <input value={lNome} onChange={e => setLNome(e.target.value)} style={inp} placeholder="Seu nome" />
+            <div style={{ fontSize: 12, color: C.text3, marginBottom: 6, letterSpacing: 1 }}>EMAIL</div>
+            <input value={lEmail} onChange={e => setLEmail(e.target.value)} style={inp} placeholder="seu@email.com" type="email" />
+          </>}
+          {!isReg && <>
+            <div style={{ fontSize: 12, color: C.text3, marginBottom: 6, letterSpacing: 1 }}>EMAIL</div>
+            <input value={lu} onChange={e => setLu(e.target.value)} style={inp} placeholder="seu@email.com" onKeyDown={e => e.key === "Enter" && handleAuth()} />
+          </>}
+          <div style={{ fontSize: 12, color: C.text3, marginBottom: 6, letterSpacing: 1 }}>SENHA</div>
+          <input value={lp} onChange={e => setLp(e.target.value)} style={{ ...inp, marginBottom: 16 }} placeholder="••••••••" type="password" onKeyDown={e => e.key === "Enter" && handleAuth()} />
+          {authErr && <div style={{ fontSize: 13, color: C.red, marginBottom: 14, padding: "10px 14px", background: "#ef444410", borderRadius: 8, border: `1px solid ${C.red}30` }}>{authErr}</div>}
+          <Btn onClick={handleAuth} full>{isReg ? "Criar conta" : "Entrar"}</Btn>
+          <div style={{ height: 1, background: C.border, margin: "16px 0" }} />
+          <button onClick={() => { setIsReg(!isReg); setAuthErr(""); }}
+            style={{ width: "100%", background: "transparent", border: "none", cursor: "pointer", color: C.orange, fontSize: 14, fontWeight: 600, fontFamily: "inherit" }}>
+            {isReg ? "Já tenho conta — entrar" : "Não tenho conta — criar agora"}
+          </button>
+        </Card>
+      </div>
+    </div>
+  );
+
+  // APP
+  return (
+    <div style={{ minHeight: "100vh", background: C.bg, fontFamily: "'Segoe UI',system-ui,sans-serif", color: C.text }}>
+      <style>{`*{box-sizing:border-box;}::-webkit-scrollbar{width:5px;}::-webkit-scrollbar-thumb{background:${C.border};border-radius:3px;}input:focus,textarea:focus{border-color:${C.orange}!important;outline:none;}input,textarea,select{color:${C.text}!important;background:${C.bg2}!important;}`}</style>
+
+      {/* Nav */}
+      <div style={{ background: C.bg1, borderBottom: `1px solid ${C.border}`, height: 56, padding: "0 1.5rem", display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, zIndex: 20 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 20, filter: `drop-shadow(0 0 8px ${C.orange})` }}>◈</span>
+          <span style={{ fontSize: 17, fontWeight: 900 }}><Neon>Flow</Neon><span style={{ color: C.text }}>Desk</span></span>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ fontSize: 13, color: C.text2, cursor: "pointer", padding: "6px 12px", borderRadius: 8, background: C.bg2, border: `1px solid ${C.border}` }}
+            onClick={() => setShowConfig(true)}>
+            {getNome()} ▾
+          </div>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div style={{ background: C.bg1, borderBottom: `1px solid ${C.border}`, display: "flex", padding: "0 1rem" }}>
+        {TABS.map(t => (
+          <button key={t.id} onClick={() => { setTab(t.id); setProjAberto(null); }}
+            style={{ padding: "13px 18px", border: "none", cursor: "pointer", fontSize: 13, fontWeight: 600, whiteSpace: "nowrap", background: "transparent", fontFamily: "inherit", color: tab === t.id ? C.orange : C.text3, borderBottom: tab === t.id ? `2px solid ${C.orange}` : "2px solid transparent", textShadow: tab === t.id ? `0 0 8px ${C.orange}` : "none" }}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ maxWidth: 900, margin: "0 auto", padding: "1.5rem 1rem" }}>
+
+        {/* DASHBOARD */}
+        {tab === "dashboard" && (
+          <div>
+            {/* Banner */}
+            <div style={{ background: `linear-gradient(135deg, #111, #1a0a00)`, border: `1px solid ${C.orange}22`, borderRadius: 16, padding: "2rem", marginBottom: "1.5rem", position: "relative", overflow: "hidden" }}>
+              <div style={{ position: "absolute", right: -10, top: -10, fontSize: 120, opacity: 0.04 }}>◈</div>
+              <div style={{ fontSize: 13, color: C.text3, marginBottom: 4 }}>
+                {new Date().toLocaleDateString("pt-BR", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
+              </div>
+              <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>
+                Olá, <Neon>{getNome().split(" ")[0]}</Neon>! 👋
+              </div>
+              <div style={{ fontSize: 14, color: C.text3 }}>
+                {projAndamento > 0 ? `Você tem ${projAndamento} projeto(s) em andamento.` : "Nenhum projeto em andamento. Que tal criar um?"}
+              </div>
+            </div>
+
+            {/* Métricas */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))", gap: 12, marginBottom: "1.5rem" }}>
+              {[
+                { icon: "◈", v: totalProjetos, l: "Total de Projetos", c: C.orange },
+                { icon: "◑", v: projAndamento, l: "Em Andamento", c: C.blue },
+                { icon: "●", v: projConcluidos, l: "Concluídos", c: C.green },
+                { icon: "✓", v: `${tarefasConcluidas}/${totalTarefas}`, l: "Tarefas", c: C.yellow },
+                { icon: "⚠", v: tarefasAtrasadas, l: "Tarefas Atrasadas", c: C.red },
+              ].map((m, i) => (
+                <Card key={i} style={{ textAlign: "center" }}>
+                  <div style={{ fontSize: 22, color: m.c, textShadow: `0 0 10px ${m.c}66`, marginBottom: 8 }}>{m.icon}</div>
+                  <div style={{ fontSize: 26, fontWeight: 800, color: m.c }}>{m.v}</div>
+                  <div style={{ fontSize: 12, color: C.text3, marginTop: 4 }}>{m.l}</div>
+                </Card>
+              ))}
+            </div>
+
+            {/* Progresso geral */}
+            {totalTarefas > 0 && (
+              <Card style={{ marginBottom: "1.5rem" }}>
+                <div style={{ fontSize: 13, color: C.text3, letterSpacing: 1, textTransform: "uppercase", marginBottom: 12 }}>Progresso geral</div>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+                  <span style={{ fontSize: 14, color: C.text2 }}>{tarefasConcluidas} de {totalTarefas} tarefas concluídas</span>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: C.orange }}>{totalTarefas ? Math.round(tarefasConcluidas / totalTarefas * 100) : 0}%</span>
+                </div>
+                <div style={{ height: 8, background: C.bg2, borderRadius: 4, overflow: "hidden" }}>
+                  <div style={{ height: "100%", background: `linear-gradient(90deg,${C.orange},${C.yellow})`, width: `${totalTarefas ? Math.round(tarefasConcluidas / totalTarefas * 100) : 0}%`, borderRadius: 4, boxShadow: `0 0 8px ${C.orange}` }} />
+                </div>
+              </Card>
+            )}
+
+            {/* Projetos recentes */}
+            <Card>
+              <div style={{ fontSize: 13, color: C.text3, letterSpacing: 1, textTransform: "uppercase", marginBottom: 12 }}>Projetos recentes</div>
+              {projetos.length === 0 ? (
+                <div style={{ textAlign: "center", padding: "2rem", color: C.text3 }}>
+                  <div style={{ fontSize: 32, marginBottom: 8, opacity: 0.3 }}>◈</div>
+                  Nenhum projeto ainda.
+                  <div style={{ marginTop: 12 }}>
+                    <Btn onClick={() => { setTab("projetos"); setModalProjeto(true); }}>+ Criar primeiro projeto</Btn>
+                  </div>
+                </div>
+              ) : projetos.slice(0, 5).map(p => {
+                const pc = pct(p);
+                return (
+                  <div key={p.id} onClick={() => { setTab("projetos"); setProjAberto(p); }}
+                    style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 0", borderBottom: `1px solid ${C.border}`, cursor: "pointer" }}>
+                    <div style={{ width: 10, height: 10, borderRadius: "50%", background: p.cor, flexShrink: 0, boxShadow: `0 0 6px ${p.cor}` }} />
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{p.nome}</div>
+                      <div style={{ fontSize: 12, color: C.text3, marginTop: 2 }}>{STATUS[p.status]?.label} · {p.tarefas?.length || 0} tarefas</div>
+                    </div>
+                    <div style={{ textAlign: "right" }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: pc >= 80 ? C.green : pc >= 50 ? C.yellow : C.orange }}>{pc}%</div>
+                      {p.fim && <div style={{ fontSize: 11, color: C.text3 }}>até {fmt(p.fim)}</div>}
+                    </div>
+                  </div>
+                );
+              })}
+            </Card>
+          </div>
+        )}
+
+        {/* PROJETOS */}
+        {tab === "projetos" && !projAberto && (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.5rem" }}>
+              <div>
+                <div style={{ fontSize: 20, fontWeight: 800 }}>Projetos</div>
+                <div style={{ fontSize: 14, color: C.text3, marginTop: 2 }}>{totalProjetos} projeto(s)</div>
+              </div>
+              <Btn onClick={() => setModalProjeto(true)}>+ Novo Projeto</Btn>
+            </div>
+            {projetos.length === 0 ? (
+              <Card style={{ textAlign: "center", padding: "3rem" }}>
+                <div style={{ fontSize: 40, opacity: 0.2, marginBottom: 12 }}>◈</div>
+                <div style={{ fontSize: 15, color: C.text3 }}>Nenhum projeto ainda.</div>
+                <div style={{ marginTop: 16 }}><Btn onClick={() => setModalProjeto(true)}>Criar primeiro projeto</Btn></div>
+              </Card>
+            ) : (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(280px,1fr))", gap: "1rem" }}>
+                {projetos.map(p => {
+                  const pc = pct(p);
+                  const st = STATUS[p.status];
+                  return (
+                    <Card key={p.id} style={{ border: `1px solid ${p.cor}22`, cursor: "pointer", transition: "border-color .2s" }}
+                      onMouseEnter={e => e.currentTarget.style.borderColor = `${p.cor}55`}
+                      onMouseLeave={e => e.currentTarget.style.borderColor = `${p.cor}22`}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <div style={{ width: 10, height: 10, borderRadius: "50%", background: p.cor, boxShadow: `0 0 8px ${p.cor}` }} />
+                          <div style={{ fontSize: 15, fontWeight: 700, color: C.text }} onClick={() => setProjAberto(p)}>{p.nome}</div>
+                        </div>
+                        <button onClick={e => { e.stopPropagation(); setConfirmDeleteProj(p.id); }}
+                          style={{ background: "transparent", border: "none", color: C.text3, cursor: "pointer", fontSize: 18, lineHeight: 1 }}>×</button>
+                      </div>
+                      {p.desc && <div style={{ fontSize: 13, color: C.text3, marginBottom: 10, lineHeight: 1.5 }}>{p.desc.slice(0, 80)}{p.desc.length > 80 ? "..." : ""}</div>}
+                      <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+                        {Object.entries(STATUS).map(([k, v]) => (
+                          <button key={k} onClick={e => { e.stopPropagation(); mudarStatusProjeto(p.id, k); }}
+                            style={{ fontSize: 11, padding: "3px 10px", borderRadius: 20, cursor: "pointer", fontFamily: "inherit", fontWeight: 600, border: `1px solid ${p.status === k ? v.color : C.border}`, background: p.status === k ? `${v.color}15` : "transparent", color: p.status === k ? v.color : C.text3 }}>
+                            {v.label}
+                          </button>
+                        ))}
+                      </div>
+                      <div style={{ height: 4, background: C.bg2, borderRadius: 2, marginBottom: 8, overflow: "hidden" }}>
+                        <div style={{ height: "100%", background: p.cor, width: `${pc}%`, borderRadius: 2, boxShadow: `0 0 6px ${p.cor}` }} />
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: C.text3 }}>
+                        <span>{pc}% concluído · {p.tarefas?.length || 0} tarefas</span>
+                        {p.fim && <span>até {fmt(p.fim)}</span>}
+                      </div>
+                      <div style={{ marginTop: 12 }}>
+                        <Btn onClick={() => setProjAberto(p)} outline style={{ fontSize: 12, padding: "6px 14px" }}>Abrir →</Btn>
+                      </div>
+                    </Card>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* PROJETO ABERTO */}
+        {tab === "projetos" && projAberto && (() => {
+          const p = projAberto;
+          const pc = pct(p);
+          return (
+            <div>
+              <button onClick={() => setProjAberto(null)} style={{ background: "transparent", border: "none", color: C.text3, cursor: "pointer", fontSize: 13, marginBottom: "1rem", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 6 }}>
+                ← Voltar para projetos
+              </button>
+
+              {/* Header projeto */}
+              <Card style={{ marginBottom: "1rem", borderLeft: `3px solid ${p.cor}` }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                  <div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+                      <div style={{ width: 12, height: 12, borderRadius: "50%", background: p.cor, boxShadow: `0 0 8px ${p.cor}` }} />
+                      <div style={{ fontSize: 20, fontWeight: 800, color: C.text }}>{p.nome}</div>
+                    </div>
+                    {p.desc && <div style={{ fontSize: 14, color: C.text3, marginBottom: 8 }}>{p.desc}</div>}
+                    <div style={{ display: "flex", gap: 12, fontSize: 12, color: C.text3 }}>
+                      <span>Criado: {fmt(p.criadoEm)}</span>
+                      {p.fim && <span>Prazo: {fmt(p.fim)}</span>}
+                      <span>{p.tarefas?.length || 0} tarefas</span>
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {Object.entries(STATUS).map(([k, v]) => (
+                      <button key={k} onClick={() => mudarStatusProjeto(p.id, k)}
+                        style={{ fontSize: 11, padding: "4px 12px", borderRadius: 20, cursor: "pointer", fontFamily: "inherit", fontWeight: 600, border: `1px solid ${p.status === k ? v.color : C.border}`, background: p.status === k ? `${v.color}15` : "transparent", color: p.status === k ? v.color : C.text3 }}>
+                        {v.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div style={{ height: 6, background: C.bg2, borderRadius: 3, marginTop: 16, overflow: "hidden" }}>
+                  <div style={{ height: "100%", background: `linear-gradient(90deg,${p.cor},${C.yellow})`, width: `${pc}%`, borderRadius: 3, boxShadow: `0 0 8px ${p.cor}` }} />
+                </div>
+                <div style={{ fontSize: 12, color: C.text3, marginTop: 6 }}>{pc}% concluído</div>
+              </Card>
+
+              {/* Sub tabs */}
+              <div style={{ display: "flex", gap: 4, marginBottom: "1rem" }}>
+                {[{ id: "tarefas", label: `Tarefas (${p.tarefas?.length || 0})` }, { id: "notas", label: `Notas (${p.notas?.length || 0})` }].map(t => (
+                  <button key={t.id} onClick={() => setSubTab(t.id)}
+                    style={{ padding: "8px 16px", border: `1px solid ${subTab === t.id ? p.cor : C.border}`, cursor: "pointer", borderRadius: 8, fontSize: 13, fontWeight: 600, fontFamily: "inherit", background: subTab === t.id ? `${p.cor}15` : "transparent", color: subTab === t.id ? p.cor : C.text3 }}>
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* TAREFAS */}
+              {subTab === "tarefas" && (
+                <div>
+                  <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "1rem" }}>
+                    <Btn onClick={() => abrirModalTarefa()} color={p.cor}>+ Nova Tarefa</Btn>
+                  </div>
+                  {p.tarefas?.length === 0 ? (
+                    <Card style={{ textAlign: "center", padding: "2rem" }}>
+                      <div style={{ fontSize: 14, color: C.text3 }}>Nenhuma tarefa ainda.</div>
+                    </Card>
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                      {p.tarefas.map(t => {
+                        const st = STATUS[t.status];
+                        const atrasada = t.fim && t.fim < today() && t.status !== "done";
+                        return (
+                          <Card key={t.id} style={{ borderLeft: `3px solid ${st.color}` }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                              <div style={{ flex: 1 }}>
+                                <div style={{ fontSize: 15, fontWeight: 600, color: t.status === "done" ? C.text3 : C.text, textDecoration: t.status === "done" ? "line-through" : "none", marginBottom: 6 }}>{t.nome}</div>
+                                <div style={{ display: "flex", gap: 12, fontSize: 12, color: C.text3, flexWrap: "wrap" }}>
+                                  {t.inicio && <span>Início: {fmt(t.inicio)}</span>}
+                                  {t.fim && <span style={{ color: atrasada ? C.red : C.text3 }}>Fim: {fmt(t.fim)}{atrasada ? " ⚠ Atrasada" : ""}</span>}
+                                </div>
+                                <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+                                  {Object.entries(STATUS).map(([k, v]) => (
+                                    <button key={k} onClick={() => {
+                                      const tarefas = p.tarefas.map(x => x.id === t.id ? { ...x, status: k } : x);
+                                      atualizarProjeto({ ...p, tarefas });
+                                    }} style={{ fontSize: 11, padding: "3px 10px", borderRadius: 20, cursor: "pointer", fontFamily: "inherit", fontWeight: 600, border: `1px solid ${t.status === k ? v.color : C.border}`, background: t.status === k ? `${v.color}15` : "transparent", color: t.status === k ? v.color : C.text3 }}>
+                                      {v.label}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                              <div style={{ display: "flex", gap: 6, flexShrink: 0, marginLeft: 10 }}>
+                                <button onClick={() => abrirModalTarefa(t)}
+                                  style={{ background: C.bg2, border: `1px solid ${C.border}`, color: C.text3, cursor: "pointer", borderRadius: 6, padding: "4px 10px", fontSize: 12, fontFamily: "inherit" }}>✎</button>
+                                <button onClick={() => deletarTarefa(t.id)}
+                                  style={{ background: "#ef444415", border: `1px solid ${C.red}30`, color: C.red, cursor: "pointer", borderRadius: 6, padding: "4px 10px", fontSize: 12, fontFamily: "inherit" }}>✕</button>
+                              </div>
+                            </div>
+                          </Card>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* NOTAS DO PROJETO */}
+              {subTab === "notas" && (
+                <div>
+                  {notaAberta ? (
+                    <div>
+                      <button onClick={() => { setNotaAberta(null); setEditNota(null); setNotaTitulo(""); setNotaTexto(""); }}
+                        style={{ background: "transparent", border: "none", color: C.text3, cursor: "pointer", fontSize: 13, marginBottom: "1rem", fontFamily: "inherit" }}>← Voltar</button>
+                      <Card>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                          <div style={{ fontSize: 17, fontWeight: 700 }}>{notaAberta.titulo}</div>
+                          <div style={{ display: "flex", gap: 8 }}>
+                            <button onClick={() => { setEditNota(notaAberta); setNotaTitulo(notaAberta.titulo); setNotaTexto(notaAberta.texto); setNotaAberta(null); }}
+                              style={{ background: C.bg2, border: `1px solid ${C.border}`, color: C.text3, cursor: "pointer", borderRadius: 6, padding: "5px 12px", fontSize: 13, fontFamily: "inherit" }}>✎ Editar</button>
+                            <button onClick={() => deletarNotaProjeto(notaAberta.id)}
+                              style={{ background: "#ef444415", border: `1px solid ${C.red}30`, color: C.red, cursor: "pointer", borderRadius: 6, padding: "5px 12px", fontSize: 13, fontFamily: "inherit" }}>✕ Excluir</button>
+                          </div>
+                        </div>
+                        <div style={{ height: 1, background: C.border, marginBottom: 12 }} />
+                        <div style={{ fontSize: 12, color: C.text3, marginBottom: 10 }}>{notaAberta.data}</div>
+                        <div style={{ fontSize: 15, color: C.text2, lineHeight: 1.8, whiteSpace: "pre-wrap" }}>{notaAberta.texto}</div>
+                      </Card>
+                    </div>
+                  ) : (
+                    <div>
+                      <Card style={{ marginBottom: "1rem" }}>
+                        <div style={{ fontSize: 13, color: C.text3, letterSpacing: 1, textTransform: "uppercase", marginBottom: 12 }}>
+                          {editNota ? "Editar nota" : "Nova nota"}
+                        </div>
+                        <input value={notaTitulo} onChange={e => setNotaTitulo(e.target.value)} style={{ ...inp, marginBottom: 10 }} placeholder="Título (opcional)" />
+                        <Textarea value={notaTexto} onChange={setNotaTexto} placeholder="Escreva sua nota aqui..." rows={4} />
+                        <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                          <Btn onClick={salvarNotaProjeto} disabled={!notaTexto.trim()} color={p.cor}>
+                            {editNota ? "Salvar edição" : "Salvar nota"}
+                          </Btn>
+                          {editNota && <Btn outline onClick={() => { setEditNota(null); setNotaTitulo(""); setNotaTexto(""); }}>Cancelar</Btn>}
+                        </div>
+                      </Card>
+                      {(p.notas || []).length === 0 ? (
+                        <Card style={{ textAlign: "center", padding: "2rem" }}>
+                          <div style={{ fontSize: 14, color: C.text3 }}>Nenhuma nota ainda.</div>
+                        </Card>
+                      ) : (
+                        <div style={{ display: "grid", gap: 10 }}>
+                          {(p.notas || []).map(n => (
+                            <div key={n.id} style={{ background: C.bg1, border: `1px solid ${C.border}`, borderRadius: 12, padding: "1rem", cursor: "pointer" }}
+                              onClick={() => setNotaAberta(n)}>
+                              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                                <div style={{ fontSize: 14, fontWeight: 700 }}>{n.titulo}</div>
+                                <div style={{ fontSize: 11, color: C.text3 }}>{n.data}</div>
+                              </div>
+                              <div style={{ fontSize: 13, color: C.text3, overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{n.texto}</div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })()}
+      </div>
+
+      {/* Modal Novo Projeto */}
+      {modalProjeto && (
+        <Modal title="◈ Novo Projeto" onClose={() => setModalProjeto(false)}>
+          <div style={{ fontSize: 12, color: C.text3, letterSpacing: 1, marginBottom: 6 }}>NOME DO PROJETO *</div>
+          <input value={pNome} onChange={e => setPNome(e.target.value)} style={inp} placeholder="Ex: Lançamento do App" autoFocus />
+          <div style={{ fontSize: 12, color: C.text3, letterSpacing: 1, marginBottom: 6 }}>DESCRIÇÃO</div>
+          <textarea value={pDesc} onChange={e => setPDesc(e.target.value)} rows={2}
+            style={{ ...inp, resize: "vertical", lineHeight: 1.6 }} placeholder="Descreva o objetivo..." />
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div>
+              <div style={{ fontSize: 12, color: C.text3, letterSpacing: 1, marginBottom: 6 }}>DATA DE TÉRMINO</div>
+              <input value={pFim} onChange={e => setPFim(e.target.value)} style={inp} type="date" />
+            </div>
+            <div>
+              <div style={{ fontSize: 12, color: C.text3, letterSpacing: 1, marginBottom: 6 }}>STATUS INICIAL</div>
+              <select value={pStatus} onChange={e => setPStatus(e.target.value)}
+                style={{ ...inp, marginBottom: 0 }}>
+                {Object.entries(STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+              </select>
+            </div>
+          </div>
+          <div style={{ fontSize: 12, color: C.text3, letterSpacing: 1, marginBottom: 10, marginTop: 4 }}>TEMPLATE</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 16 }}>
+            {TEMPLATES.map(t => (
+              <div key={t.id} onClick={() => setPTemplate(t.id)}
+                style={{ padding: "8px 12px", borderRadius: 8, cursor: "pointer", fontSize: 13, border: `1px solid ${pTemplate === t.id ? C.orange : C.border}`, background: pTemplate === t.id ? C.orangeL : "transparent", color: pTemplate === t.id ? C.orange : C.text3, fontWeight: pTemplate === t.id ? 700 : 400 }}>
+                {t.label}
+              </div>
+            ))}
+          </div>
+          <div style={{ fontSize: 12, color: C.text3, letterSpacing: 1, marginBottom: 10 }}>COR DO PROJETO</div>
+          <div style={{ display: "flex", gap: 10, marginBottom: 20 }}>
+            {CORES_PROJ.map(c => (
+              <div key={c} onClick={() => setPCor(c)}
+                style={{ width: 28, height: 28, borderRadius: "50%", background: c, cursor: "pointer", boxShadow: `0 0 8px ${c}`, border: pCor === c ? "2px solid #fff" : "2px solid transparent" }} />
+            ))}
+          </div>
+          <Btn onClick={criarProjeto} full disabled={!pNome.trim()}>Criar Projeto</Btn>
+        </Modal>
+      )}
+
+      {/* Modal Tarefa */}
+      {modalTarefa && (
+        <Modal title={editTarefa ? "✎ Editar Tarefa" : "◈ Nova Tarefa"} onClose={() => setModalTarefa(false)}>
+          <div style={{ fontSize: 12, color: C.text3, letterSpacing: 1, marginBottom: 6 }}>NOME DA TAREFA *</div>
+          <input value={tNome} onChange={e => setTNome(e.target.value)} style={inp} placeholder="Ex: Criar wireframe" autoFocus />
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div>
+              <div style={{ fontSize: 12, color: C.text3, letterSpacing: 1, marginBottom: 6 }}>DATA DE INÍCIO</div>
+              <input value={tInicio} onChange={e => setTInicio(e.target.value)} style={inp} type="date" />
+            </div>
+            <div>
+              <div style={{ fontSize: 12, color: C.text3, letterSpacing: 1, marginBottom: 6 }}>DATA DE TÉRMINO</div>
+              <input value={tFim} onChange={e => setTFim(e.target.value)} style={inp} type="date" />
+            </div>
+          </div>
+          <div style={{ fontSize: 12, color: C.text3, letterSpacing: 1, marginBottom: 6 }}>STATUS</div>
+          <select value={tStatus} onChange={e => setTStatus(e.target.value)} style={{ ...inp, marginBottom: 20 }}>
+            {Object.entries(STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+          </select>
+          <Btn onClick={salvarTarefa} full disabled={!tNome.trim()}>
+            {editTarefa ? "Salvar alterações" : "Criar Tarefa"}
+          </Btn>
+        </Modal>
+      )}
+
+      {/* Modal Config */}
+      {showConfig && (
+        <Modal title="⚙ Configurações" onClose={() => { setShowConfig(false); setConfirmDelete(false); }}>
+          <div style={{ fontSize: 13, color: C.text3, marginBottom: 4 }}>Conta</div>
+          <div style={{ fontSize: 15, fontWeight: 600, color: C.text, marginBottom: 4 }}>{getNome()}</div>
+          <div style={{ fontSize: 13, color: C.text3, marginBottom: 20 }}>{email}</div>
+          <div style={{ height: 1, background: C.border, marginBottom: 20 }} />
+          <Btn onClick={handleLogout} outline full style={{ marginBottom: 12 }}>Sair da conta</Btn>
+          {!confirmDelete ? (
+            <Btn danger full onClick={() => setConfirmDelete(true)}>Excluir conta</Btn>
+          ) : (
+            <div>
+              <div style={{ fontSize: 14, color: C.red, marginBottom: 12, padding: "10px 14px", background: "#ef444410", borderRadius: 8 }}>
+                Tem certeza? Todos os seus projetos e dados serão apagados permanentemente.
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <Btn danger onClick={handleDeleteAccount}>Confirmar exclusão</Btn>
+                <Btn outline onClick={() => setConfirmDelete(false)}>Cancelar</Btn>
+              </div>
+            </div>
+          )}
+        </Modal>
+      )}
+
+      {/* Confirmar delete projeto */}
+      {confirmDeleteProj && (
+        <Modal title="Excluir projeto?" onClose={() => setConfirmDeleteProj(null)}>
+          <div style={{ fontSize: 14, color: C.text2, marginBottom: 20 }}>
+            Este projeto e todas as suas tarefas e notas serão excluídos permanentemente.
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <Btn danger onClick={() => deletarProjeto(confirmDeleteProj)}>Confirmar</Btn>
+            <Btn outline onClick={() => setConfirmDeleteProj(null)}>Cancelar</Btn>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
